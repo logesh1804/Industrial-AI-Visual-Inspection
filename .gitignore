@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual Environment
+venv/
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# YOLO Training
+runs/
+
+# Project Outputs
+output/
+reports/
+
+# OS Files
+.DS_Store
+Thumbs.db
