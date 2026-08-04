@@ -21,3 +21,16 @@ reports/
 # OS Files
 .DS_Store
 Thumbs.db
+# Virtual Environments
+venv/
+venv_old/
+.venv/
+env/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# IDE settings
+.vscode/
+.idea/

@@ -1,0 +1,13 @@
+path: C:/Users/sabarishclean/Desktop/Industrial-AI-Visual-Inspection/dataset
+
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: open
+  1: short
+  2: mousebite
+  3: spur
+  4: spurious_copper
+  5: pin_hole
