@@ -1,19 +1,31 @@
+from pathlib import Path
 from ultralytics import YOLO
 
-# Load the pretrained YOLO model
-model = YOLO("yolov8n.pt")
 
-# Run inference on a sample image using GPU 0
-results = model(
-    "https://ultralytics.com/images/bus.jpg",
-    device=0,
-    save=True,
-    project="output",
-    name="first_inference"
-)
+def main():
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Print detected object names and confidence scores
-for result in results:
-    for class_id, confidence in zip(result.boxes.cls, result.boxes.conf):
-        object_name = result.names[int(class_id)]
-        print(f"{object_name}: {float(confidence):.2f}")
+    model = YOLO(
+        PROJECT_ROOT
+        / "output"
+        / "training"
+        / "pcb_defect_yolov8n"
+        / "weights"
+        / "best.pt"
+    )
+
+    results = model.predict(
+        source=PROJECT_ROOT / "test_images",
+        imgsz=640,
+        conf=0.25,
+        save=True,
+        show=False,
+    )
+
+    print("\nDetection completed!")
+    print("Results saved in:")
+    print(PROJECT_ROOT / "runs" / "detect")
+
+
+if __name__ == "__main__":
+    main()
