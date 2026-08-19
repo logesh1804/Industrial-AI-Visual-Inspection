@@ -100,7 +100,7 @@ echo "[3/5] Installing System Prerequisites via apt..."
 sudo apt-get update
 sudo apt-get install -y \
     python3-pip \
-    libopenblas-base \
+    libopenblas-dev \
     libopenmpi-dev \
     libjpeg-dev \
     zlib1g-dev \
