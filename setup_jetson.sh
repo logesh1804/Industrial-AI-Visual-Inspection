@@ -3,6 +3,9 @@
 # Exit on error
 set -e
 
+# Bypass PEP 668 externally managed environment block for pip (Ubuntu 24.04+)
+export PIP_BREAK_SYSTEM_PACKAGES=1
+
 echo "=========================================================="
 echo "      Jetson Setup Script for Visual Inspection App       "
 echo "=========================================================="
