@@ -135,6 +135,10 @@ echo "[5/5] Installing Ultralytics YOLOv8..."
 # Note: Ultralytics expects torch/torchvision. Since they are already installed, pip will see the requirements are met.
 python3 -m pip install ultralytics
 
+# Force downgrade numpy to 1.x to avoid compatibility issues with system libraries (like matplotlib)
+echo "Downgrading NumPy to 1.x for compatibility..."
+python3 -m pip install "numpy<2"
+
 echo ""
 echo "=========================================================="
 echo "Installation complete. Testing environment..."
