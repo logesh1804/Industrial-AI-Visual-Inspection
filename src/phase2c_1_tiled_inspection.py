@@ -30,9 +30,9 @@ if not MODEL_PATH.exists():
         MODEL_PATH = fallback_model
 DISTANCE_FILE = PROJECT_ROOT / "distance_sensor.txt"
 
-# Camera URLs (using active IP stream)
-IP_CAMERA_URL = "http://192.168.1.44:8080/video"
-IP_SHOT_URL = "http://192.168.1.44:8080/shot.jpg"
+# Camera URLs (defaults to active IP stream or override via --ip)
+IP_CAMERA_URL = "http://192.168.1.20:8080/video"
+IP_SHOT_URL = "http://192.168.1.20:8080/shot.jpg"
 
 HOUGH_SETTINGS = {
     "minDist": 25,
@@ -168,56 +168,17 @@ def read_distance_sensor():
     return 125.0
 
 def clean_reports_directory():
-    """Wipes previous output report directory and copies folder to start clean"""
+    """Wipes previous output report directory to start clean"""
     print("[CLEAN] Cleaning previous report directories...")
     for path in [OUT_DIR, TILES_DIR, DEFECTS_DIR]:
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
         path.mkdir(parents=True, exist_ok=True)
 
-    files_to_wipe = [
-        "01_original_camera.jpg", "02_distance_check.jpg", "03_four_hole_detection.jpg",
-        "04_scale_reference.jpg", "05_pcb_roi.jpg", "06_registered_pcb.jpg",
-        "07_trace_channel.jpg", "07_binarized_pcb.jpg", "07_silkscreen_text_mask.jpg",
-        "08_tile_grid.jpg", "10_tile_detections.jpg",
-        "11_reconstructed_tile_grid.jpg", "12_final_pcb_detection.jpg",
-        "phase2c_1_engineering_report.jpg", "comparison_report.txt", "detections.csv"
-    ]
-    for filename in files_to_wipe:
-        art_file = ARTIFACTS_DIR / filename
-        if art_file.exists():
-            try:
-                art_file.unlink()
-            except:
-                pass
-    art_defects = ARTIFACTS_DIR / "13_defect_crops"
-    if art_defects.exists():
-        shutil.rmtree(art_defects, ignore_errors=True)
-    art_defects.mkdir(parents=True, exist_ok=True)
-
 def copy_to_artifacts():
-    """Copies all generated report assets directly to the artifacts directory"""
-    print("[SYNC] Synchronizing report files to artifacts folder...")
-    files_to_copy = [
-        "01_original_camera.jpg", "02_distance_check.jpg", "03_four_hole_detection.jpg",
-        "04_scale_reference.jpg", "05_pcb_roi.jpg", "06_registered_pcb.jpg",
-        "07_trace_channel.jpg", "07_binarized_pcb.jpg", "07_silkscreen_text_mask.jpg",
-        "08_tile_grid.jpg", "10_tile_detections.jpg",
-        "11_reconstructed_tile_grid.jpg", "12_final_pcb_detection.jpg",
-        "phase2c_1_engineering_report.jpg", "comparison_report.txt", "detections.csv"
-    ]
-    for filename in files_to_copy:
-        src = OUT_DIR / filename
-        dst = ARTIFACTS_DIR / filename
-        if src.exists():
-            shutil.copy(src, dst)
-            
-    src_defects = DEFECTS_DIR
-    dst_defects = ARTIFACTS_DIR / "13_defect_crops"
-    dst_defects.mkdir(parents=True, exist_ok=True)
-    for f in src_defects.glob("*.jpg"):
-        shutil.copy(f, dst_defects / f.name)
-    print("[SYNC] Synchronization completed successfully!")
+    """Reports generated directly to OUT_DIR"""
+    print(f"[REPORT] Reports saved in: {OUT_DIR}")
+
 
 def order_points(pts):
     """Sort coordinates to: top-left, top-right, bottom-right, bottom-left"""
@@ -1198,10 +1159,17 @@ FINAL REAL DEFECTS LIST
     print(f"\n[REPORT] Saved txt/csv/images and compiled engineering report. PCB Status: {overall_status}!")
 
 def main():
+    global IP_CAMERA_URL, IP_SHOT_URL
     parser = argparse.ArgumentParser(description="Phase 2C.1 Industrial AI Visual Inspection")
     parser.add_argument("--image", "-i", type=str, default=None, help="Path to input image for direct static inspection")
     parser.add_argument("--distance", "-d", type=float, default=None, help="Distance sensor reading in mm")
+    parser.add_argument("--ip", type=str, default=None, help="Custom IP Camera base URL (e.g. http://192.168.1.20:8080)")
     args = parser.parse_args()
+
+    if args.ip:
+        base_ip = args.ip.rstrip("/")
+        IP_CAMERA_URL = f"{base_ip}/video"
+        IP_SHOT_URL = f"{base_ip}/shot.jpg"
 
     if not MODEL_PATH.exists():
         print(f"[ERROR] YOLO model not found at: {MODEL_PATH}")
