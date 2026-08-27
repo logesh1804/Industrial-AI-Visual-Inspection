@@ -5,6 +5,7 @@ Automatically identifies Silkscreen Text & Solder Vias to negate false positive 
 """
 import sys
 import os
+import platform
 import shutil
 import urllib.request
 import time
@@ -15,16 +16,18 @@ import csv
 import argparse
 from ultralytics import YOLO
 
-# Constants
-PROJECT_ROOT = Path(r"C:\Users\sabarishclean\Desktop\Industrial-AI-Visual-Inspection")
+# Dynamic Project Root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = PROJECT_ROOT / "output" / "phase2c_1_4hole_dynamic_tiled"
 TILES_DIR = OUT_DIR / "09_individual_tiles"
 DEFECTS_DIR = OUT_DIR / "13_defect_crops"
 
-# Artifacts Directory
-ARTIFACTS_DIR = Path(r"C:\Users\sabarishclean\.gemini\antigravity-ide\brain\e1001de1-7b9a-49a0-b0fb-c022f925ab3c")
-
+# Model Paths
 MODEL_PATH = PROJECT_ROOT / "output" / "training" / "pcb_defect_yolov8n" / "weights" / "best.pt"
+if not MODEL_PATH.exists():
+    fallback_model = PROJECT_ROOT / "yolov8n.pt"
+    if fallback_model.exists():
+        MODEL_PATH = fallback_model
 DISTANCE_FILE = PROJECT_ROOT / "distance_sensor.txt"
 
 # Camera URLs (using active IP stream)
@@ -84,9 +87,39 @@ def sep(title="", width=76, ch="="):
     else:
         print(ch * width)
 
+def get_jetson_csi_pipeline(sensor_id=0, width=1280, height=720, framerate=30, flip_method=0):
+    """Generates GStreamer pipeline for Jetson Nano CSI camera (IMX219 / Raspberry Pi Cam)"""
+    return (
+        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"video/x-raw(memory:NVMM), width=(int){width}, height=(int){height}, format=(string)NV12, framerate=(fraction){framerate}/1 ! "
+        f"nvvidconv flip-method={flip_method} ! "
+        f"video/x-raw, width=(int){width}, height=(int){height}, format=(string)BGRx ! "
+        f"videoconvert ! "
+        f"video/x-raw, format=(string)BGR ! appsink drop=1"
+    )
+
+def is_jetson():
+    """Detects if running on NVIDIA Jetson platform"""
+    return os.path.exists("/etc/nv_tegra_release") or os.path.exists("/sys/firmware/devicetree/base/model")
+
 def connect_camera():
-    """Attempts to connect to IP Cam or falls back to USB cams"""
-    # 1. Try IP Cam
+    """Attempts to connect to CSI Cam (Jetson), IP Cam, or USB Webcams"""
+    # 1. If on Jetson, try CSI Camera first
+    if is_jetson():
+        print("Detected NVIDIA Jetson platform. Testing CSI Camera...")
+        try:
+            pipeline = get_jetson_csi_pipeline(sensor_id=0, width=1280, height=720, framerate=30)
+            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    print("Successfully connected to Jetson CSI Camera!")
+                    return cap, False
+            cap.release()
+        except Exception as e:
+            print(f"Jetson CSI Camera probe failed: {e}")
+
+    # 2. Try IP Cam
     print(f"Connecting to IP Camera at {IP_CAMERA_URL}...")
     try:
         reader = IPStreamReader(IP_CAMERA_URL)
@@ -97,19 +130,26 @@ def connect_camera():
     except Exception as e:
         print(f"Failed to connect to IP Camera: {e}. Moving to USB cameras.")
 
-    # 2. Try USB Web Cams
-    for idx in [1, 2, 0]:
-        print(f"Connecting to USB Web Camera (Index {idx})...")
-        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+    # 3. Try USB Web Cams (V4L2 on Linux/Jetson, DSHOW on Windows)
+    for idx in [0, 1, 2]:
+        print(f"Connecting to USB Camera (Index {idx})...")
+        if platform.system() == "Windows":
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        else:
+            cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+        
         if not cap.isOpened():
             cap = cv2.VideoCapture(idx)
+            
         if cap.isOpened():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            # Try to turn on Auto-Focus by default
             cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
-            print(f"Successfully connected to USB Camera (Index {idx})!")
-            return cap, False
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                print(f"Successfully connected to USB Camera (Index {idx})!")
+                return cap, False
+            cap.release()
 
     return None, False
 
