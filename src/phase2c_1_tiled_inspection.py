@@ -43,7 +43,7 @@ HOUGH_SETTINGS = {
 }
 
 # Detection Thresholds
-CONF_THRESHOLD = 0.45
+CONF_THRESHOLD = 0.15
 IOU_THRESHOLD = 0.45
 
 class IPStreamReader:
@@ -586,11 +586,11 @@ def detect_silkscreen_and_text_regions(aligned_img):
                     
     return fused_text_boxes, regular_vias, text_mask_viz
 
-def filter_defects_with_text_and_pads(raw_detections, text_boxes, regular_vias):
+def filter_defects_with_text_and_pads(raw_detections, text_boxes, regular_vias, enable_text_negation=True):
     """
     Evaluates candidate YOLO detections.
     If a defect overlaps with a text/silkscreen region or is a false alarm on a regular via pad,
-    it is NEGATED/FILTERED OUT.
+    it is NEGATED/FILTERED OUT (unless enable_text_negation is False).
     """
     valid_defects = []
     negated_defects = []
@@ -607,28 +607,29 @@ def filter_defects_with_text_and_pads(raw_detections, text_boxes, regular_vias):
         is_negated = False
         negate_reason = ""
         
-        # Check collision with Text / Silkscreen boxes (with 6px safety padding)
-        pad = 6
-        for tb in text_boxes:
-            tx1, ty1, tx2, ty2 = tb[0] - pad, tb[1] - pad, tb[2] + pad, tb[3] + pad
-            
-            # Check center point inside text box
-            if (tx1 <= cx <= tx2) and (ty1 <= cy <= ty2):
-                is_negated = True
-                negate_reason = "Silkscreen/Text Region"
-                break
+        # Check collision with Text / Silkscreen boxes (tight 2px padding)
+        if enable_text_negation:
+            pad = 2
+            for tb in text_boxes:
+                tx1, ty1, tx2, ty2 = tb[0] - pad, tb[1] - pad, tb[2] + pad, tb[3] + pad
                 
-            # Check overlap area
-            ix1 = max(gx1, tx1)
-            iy1 = max(gy1, ty1)
-            ix2 = min(gx2, tx2)
-            iy2 = min(gy2, ty2)
-            if ix2 > ix1 and iy2 > iy1:
-                inter_area = (ix2 - ix1) * (iy2 - iy1)
-                if det_area > 0 and (inter_area / float(det_area)) > 0.15:
+                # Check center point inside text box
+                if (tx1 <= cx <= tx2) and (ty1 <= cy <= ty2):
                     is_negated = True
-                    negate_reason = "Silkscreen/Text Overlap"
+                    negate_reason = "Silkscreen/Text Region"
                     break
+                
+                # Check significant overlap area (>40% of defect area)
+                ix1 = max(gx1, tx1)
+                iy1 = max(gy1, ty1)
+                ix2 = min(gx2, tx2)
+                iy2 = min(gy2, ty2)
+                if ix2 > ix1 and iy2 > iy1:
+                    inter_area = (ix2 - ix1) * (iy2 - iy1)
+                    if det_area > 0 and (inter_area / float(det_area)) > 0.40:
+                        is_negated = True
+                        negate_reason = "Silkscreen/Text Overlap"
+                        break
                     
         # Check collision of pin_hole false positives with regular solder vias
         if not is_negated and cname == "pin_hole":
@@ -650,7 +651,7 @@ def filter_defects_with_text_and_pads(raw_detections, text_boxes, regular_vias):
             
     return valid_defects, negated_defects
 
-def perform_static_inspection(frame_captured, distance, model, connected_src):
+def perform_static_inspection(frame_captured, distance, model, connected_src, custom_conf=None, enable_text_negation=True):
     """Executes the full preprocessing, tiling, text negation, and compiled report generation"""
     start_time = time.time()
     h_orig, w_orig = frame_captured.shape[:2]
@@ -770,46 +771,22 @@ def perform_static_inspection(frame_captured, distance, model, connected_src):
             [corner_holes["BR"][0] + rx, corner_holes["BR"][1] + ry],
             [corner_holes["BL"][0] + rx, corner_holes["BL"][1] + ry]
         ], dtype="float32")
+        rect = order_points(src_pts)
+        (tl_pt, tr_pt, br_pt, bl_pt) = rect
         
-        cx_tl, cy_tl = corner_holes["TL"][0], corner_holes["TL"][1]
-        cx_tr, cy_tr = corner_holes["TR"][0], corner_holes["TR"][1]
-        cx_br, cy_br = corner_holes["BR"][0], corner_holes["BR"][1]
-        cx_bl, cy_bl = corner_holes["BL"][0], corner_holes["BL"][1]
+        widthA = np.sqrt(((br_pt[0] - bl_pt[0]) ** 2) + ((br_pt[1] - bl_pt[1]) ** 2))
+        widthB = np.sqrt(((tr_pt[0] - tl_pt[0]) ** 2) + ((tr_pt[1] - tl_pt[1]) ** 2))
+        maxWidth = max(int(widthA), int(widthB))
+        heightA = np.sqrt(((tr_pt[0] - br_pt[0]) ** 2) + ((tr_pt[1] - br_pt[1]) ** 2))
+        heightB = np.sqrt(((tl_pt[0] - bl_pt[0]) ** 2) + ((tl_pt[1] - bl_pt[1]) ** 2))
+        maxHeight = max(int(heightA), int(heightB))
         
-        inset_left = (cx_tl + cx_bl) / 2.0
-        inset_right = (rw - cx_tr + rw - cx_br) / 2.0
-        inset_top = (cy_tl + cy_tr) / 2.0
-        inset_bottom = (rh - cy_bl + rh - cy_br) / 2.0
-        
-        dst_pts = np.array([
-            [inset_left, inset_top],
-            [rw - inset_right, inset_top],
-            [rw - inset_right, rh - inset_bottom],
-            [inset_left, rh - inset_bottom]
-        ], dtype="float32")
-        
-        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-        aligned_img = cv2.warpPerspective(frame_captured, M, (rw, rh))
+        dst_pts = np.array([[0, 0], [maxWidth-1, 0], [maxWidth-1, maxHeight-1], [0, maxHeight-1]], dtype="float32")
+        M = cv2.getPerspectiveTransform(rect, dst_pts)
+        aligned_img = cv2.warpPerspective(frame_captured, M, (maxWidth, maxHeight))
     else:
-        peri = cv2.arcLength(pcb_contour, True)
-        approx_poly = cv2.approxPolyDP(pcb_contour, 0.02 * peri, True)
-        if len(approx_poly) == 4:
-            reg_status = f"Contour Quad Fallback ({detected_color})"
-            rect = order_points(approx_poly.reshape(4, 2))
-            (tl_pt, tr_pt, br_pt, bl_pt) = rect
-            widthA = np.sqrt(((br_pt[0] - bl_pt[0]) ** 2) + ((br_pt[1] - bl_pt[1]) ** 2))
-            widthB = np.sqrt(((tr_pt[0] - tl_pt[0]) ** 2) + ((tr_pt[1] - tl_pt[1]) ** 2))
-            maxWidth = max(int(widthA), int(widthB))
-            heightA = np.sqrt(((tr_pt[0] - br_pt[0]) ** 2) + ((tr_pt[1] - br_pt[1]) ** 2))
-            heightB = np.sqrt(((tl_pt[0] - bl_pt[0]) ** 2) + ((tl_pt[1] - bl_pt[1]) ** 2))
-            maxHeight = max(int(heightA), int(heightB))
-            
-            dst_pts = np.array([[0, 0], [maxWidth-1, 0], [maxWidth-1, maxHeight-1], [0, maxHeight-1]], dtype="float32")
-            M = cv2.getPerspectiveTransform(rect, dst_pts)
-            aligned_img = cv2.warpPerspective(frame_captured, M, (maxWidth, maxHeight))
-        else:
-            reg_status = f"Crop Fallback ({detected_color})"
-            aligned_img = roi_img.copy()
+        reg_status = f"Crop Fallback ({detected_color})"
+        aligned_img = roi_img.copy()
 
     cv2.imwrite(str(OUT_DIR / "06_registered_pcb.jpg"), aligned_img)
     h_align, w_align = aligned_img.shape[:2]
@@ -824,19 +801,23 @@ def perform_static_inspection(frame_captured, distance, model, connected_src):
     cv2.imwrite(str(OUT_DIR / "07_silkscreen_text_mask.jpg"), text_mask_viz)
 
     # 5. Color-Adaptive High-Contrast Trace Channel & Dynamic Confidence Gating
+    if custom_conf is not None:
+        active_conf = float(custom_conf)
+    elif detected_color == "Green":
+        active_conf = 0.18
+    elif detected_color == "Blue":
+        active_conf = 0.15
+    elif detected_color in ["Black", "Black/Dark"]:
+        active_conf = 0.15
+    else:
+        active_conf = 0.15
+
     if detected_color == "Green":
         trace_channel = aligned_img[:, :, 2]
-        active_conf = 0.45
-    elif detected_color == "Blue":
-        trace_channel = cv2.cvtColor(aligned_img, cv2.COLOR_BGR2GRAY)
-        active_conf = 0.25
-    elif detected_color in ["Black", "Black/Dark"]:
-        # Evidence from controlled diagnostic: Simple Grayscale gives 4.4x better detection (31 vs 7) than CLAHE
-        trace_channel = cv2.cvtColor(aligned_img, cv2.COLOR_BGR2GRAY)
-        active_conf = 0.22
     else:
         trace_channel = cv2.cvtColor(aligned_img, cv2.COLOR_BGR2GRAY)
-        active_conf = 0.30
+        
+    print(f"[INSPECTION] Board Color: {detected_color} | Active Confidence Threshold: {active_conf:.2f} | Text Negation: {enable_text_negation}")
         
     cv2.imwrite(str(OUT_DIR / "07_trace_channel.jpg"), trace_channel)
     
@@ -941,7 +922,7 @@ def perform_static_inspection(frame_captured, distance, model, connected_src):
 
     # 9. Defect Negation using Silkscreen Text Regions & Solder Pads
     final_valid_defects, negated_text_defects = filter_defects_with_text_and_pads(
-        nms_detections, text_boxes, regular_vias
+        nms_detections, text_boxes, regular_vias, enable_text_negation=enable_text_negation
     )
     print(f"[FILTER] Total NMS Detections: {len(nms_detections)} | Negated Text/Pad False Positives: {len(negated_text_defects)} | Real Defects: {len(final_valid_defects)}")
 
@@ -1164,7 +1145,12 @@ def main():
     parser.add_argument("--image", "-i", type=str, default=None, help="Path to input image for direct static inspection")
     parser.add_argument("--distance", "-d", type=float, default=None, help="Distance sensor reading in mm")
     parser.add_argument("--ip", type=str, default=None, help="Custom IP Camera base URL (e.g. http://192.168.1.20:8080)")
+    parser.add_argument("--conf", "-c", type=float, default=None, help="Custom confidence threshold (e.g. 0.10 or 0.15)")
+    parser.add_argument("--disable-text-negation", action="store_true", help="Disable silkscreen text negation (detect all defects including labeled text)")
     args = parser.parse_args()
+
+    custom_conf = args.conf
+    enable_text_neg = not args.disable_text_negation
 
     if args.ip:
         base_ip = args.ip.rstrip("/")
@@ -1188,7 +1174,8 @@ def main():
         distance = args.distance if args.distance is not None else read_distance_sensor()
         sep(f"RUNNING STATIC VERIFICATION ON: {img_path.name}")
         clean_reports_directory()
-        perform_static_inspection(frame_capture, distance, model, f"Static File: {img_path.name}")
+        perform_static_inspection(frame_capture, distance, model, f"Static File: {img_path.name}",
+                                  custom_conf=custom_conf, enable_text_negation=enable_text_neg)
         return
 
     sep("INITIALIZING LIVE INSPECTION LOOP")
@@ -1335,9 +1322,10 @@ def main():
                 frame_capture = frame.copy()
                 
             clean_reports_directory()
-            perform_static_inspection(frame_capture, distance, model, connected_src)
+            perform_static_inspection(frame_capture, distance, model, connected_src,
+                                      custom_conf=custom_conf, enable_text_negation=enable_text_neg)
             
-            feedback_msg = f"INSPECTION COMPLETE ({detected_color} PCB)! Saved to artifacts."
+            feedback_msg = f"INSPECTION COMPLETE ({detected_color} PCB)! Check output folder."
             feedback_time = time.time()
 
     cap.release()
